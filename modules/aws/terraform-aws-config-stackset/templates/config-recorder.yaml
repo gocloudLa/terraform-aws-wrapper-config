@@ -1,0 +1,119 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: AWS Config recorder and delivery channel for organization member accounts (managed by GoCloud terraform-aws-wrapper-config).
+
+Parameters:
+  HomeRegion:
+    Type: String
+    Description: Home Region; global resource types (IAM) are recorded only there.
+  RecorderName:
+    Type: String
+    Description: Name of the AWS Config configuration recorder and delivery channel.
+  RoleName:
+    Type: String
+    Description: Base name of the IAM role used by the recorder (the Region is appended).
+  BucketName:
+    Type: String
+    Description: Central S3 bucket (log archive account) that receives configuration history and snapshots.
+  KeyPrefix:
+    Type: String
+    Default: ""
+    Description: S3 key prefix for delivered objects (empty means none).
+  KmsKeyArn:
+    Type: String
+    Default: ""
+    Description: KMS key ARN used to encrypt delivered objects (empty means bucket default encryption).
+  IncludeGlobalResourceTypes:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Record global resource types (IAM) in the home Region.
+  RecordingFrequency:
+    Type: String
+    Default: CONTINUOUS
+    AllowedValues: [CONTINUOUS, DAILY]
+    Description: Default recording frequency.
+  DeliveryFrequency:
+    Type: String
+    Default: TwentyFour_Hours
+    AllowedValues: [One_Hour, Three_Hours, Six_Hours, Twelve_Hours, TwentyFour_Hours]
+    Description: Configuration snapshot delivery frequency.
+
+Conditions:
+  HasKeyPrefix: !Not [!Equals [!Ref KeyPrefix, ""]]
+  HasKmsKey: !Not [!Equals [!Ref KmsKeyArn, ""]]
+  RecordGlobalResources: !And
+    - !Equals [!Ref IncludeGlobalResourceTypes, "true"]
+    - !Equals [!Ref "AWS::Region", !Ref HomeRegion]
+
+Resources:
+  ConfigRecorderRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${RoleName}-${AWS::Region}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: config.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AWS_ConfigRole"
+      Policies:
+        - PolicyName: config-delivery
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetBucketAcl
+                  - s3:ListBucket
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${BucketName}"
+              - Effect: Allow
+                Action: s3:PutObject
+                Resource: !If
+                  - HasKeyPrefix
+                  - !Sub "arn:${AWS::Partition}:s3:::${BucketName}/${KeyPrefix}/AWSLogs/${AWS::AccountId}/*"
+                  - !Sub "arn:${AWS::Partition}:s3:::${BucketName}/AWSLogs/${AWS::AccountId}/*"
+              - !If
+                - HasKmsKey
+                - Effect: Allow
+                  Action:
+                    - kms:GenerateDataKey*
+                    - kms:Decrypt
+                    - kms:DescribeKey
+                  Resource: !Ref KmsKeyArn
+                - !Ref AWS::NoValue
+
+  ConfigurationRecorder:
+    Type: AWS::Config::ConfigurationRecorder
+    Properties:
+      Name: !Ref RecorderName
+      RoleARN: !GetAtt ConfigRecorderRole.Arn
+      RecordingGroup:
+        AllSupported: true
+        IncludeGlobalResourceTypes: !If [RecordGlobalResources, true, false]
+      RecordingMode:
+        RecordingFrequency: !Ref RecordingFrequency
+
+  # No DependsOn on purpose: the ConfigurationRecorder handler only stabilizes once recording starts, which needs the
+  # delivery channel. Making the channel wait for the recorder deadlocks the stack ("did not stabilize" after ~10 min).
+  # Both are created in parallel (same as the AWS EnableAWSConfig StackSet sample) and the handlers retry until ready.
+  DeliveryChannel:
+    Type: AWS::Config::DeliveryChannel
+    Properties:
+      Name: !Ref RecorderName
+      S3BucketName: !Ref BucketName
+      S3KeyPrefix: !If [HasKeyPrefix, !Ref KeyPrefix, !Ref AWS::NoValue]
+      S3KmsKeyArn: !If [HasKmsKey, !Ref KmsKeyArn, !Ref AWS::NoValue]
+      ConfigSnapshotDeliveryProperties:
+        DeliveryFrequency: !Ref DeliveryFrequency
+
+Outputs:
+  ConfigurationRecorderName:
+    Value: !Ref ConfigurationRecorder
+  ConfigRecorderRoleArn:
+    Value: !GetAtt ConfigRecorderRole.Arn

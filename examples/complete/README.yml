@@ -1,0 +1,9 @@
+title: "Complete example"
+description: "Runnable root module wiring for terraform-aws-wrapper-config; parameters follow the same variable pattern as other GoCloud wrappers (metadata, config_parameters, config_defaults)."
+main_purpose: "Demonstrate organization-wide AWS Config (StackSet recorders, management recorder, central bucket, KMS, aggregator) with apply/destroy-friendly overrides; production should tighten log_bucket/kms/recorder settings via tfvars or a higher-level stack."
+key_features:
+  - "**metadata** — Defined in `metadata.tf` (same pattern as other examples; optional `variable \"metadata\"` remains commented in `variables.tf`)."
+  - "**config_parameters** — Inline map in `main.tf`; set `enable = true` to create resources."
+  - "**config_defaults** — Same merge pattern as other wrappers (`tags` fallback alongside `config_parameters.tags` and `metadata.common_tags`)."
+  - "**Non-defaults in the example** — Literals with `# Default: …` comments vs wrapper `../../locals.tf` / `../../main.tf`."
+  - "**Providers** — Default `aws` plus org, sec, log, and kms aliases on the same credentials; add a git-ignored `providers_override.tf` with per-alias `profile` for multi-account tests."
